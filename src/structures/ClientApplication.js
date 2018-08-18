@@ -53,7 +53,7 @@ class ClientApplication extends Base {
 
     /**
      * The app's redirect URIs
-     * @type {?string[]}
+     * @type {string[]}
      */
     this.redirectURIs = data.redirect_uris;
 
@@ -71,25 +71,25 @@ class ClientApplication extends Base {
 
     /**
      * If this app can use rpc
-     * @type {?boolean}
+     * @type {boolean}
      */
     this.rpcApplicationState = data.rpc_application_state;
 
     /**
      * Object containing basic info about this app's bot
-     * @type {?Object}
+     * @type {Object}
      */
     this.bot = data.bot;
 
     /**
      * The flags for the app
-     * @type {?number}
+     * @type {number}
      */
     this.flags = data.flags;
 
     /**
      * OAuth2 secret for the application
-     * @type {?string}
+     * @type {string}
      */
     this.secret = data.secret;
 
