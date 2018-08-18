@@ -1,7 +1,8 @@
 const Snowflake = require('../util/Snowflake');
-const { ClientApplicationAssetTypes, Endpoints } = require('../util/Constants');
-const DataResolver = require('../util/DataResolver');
+const { ClientApplicationAssetTypes } = require('../util/Constants');
 const Base = require('./Base');
+
+const AssetTypes = Object.keys(ClientApplicationAssetTypes);
 
 /**
  * Represents a Client OAuth2 Application.
@@ -52,7 +53,7 @@ class ClientApplication extends Base {
 
     /**
      * The app's redirect URIs
-     * @type {string[]}
+     * @type {?string[]}
      */
     this.redirectURIs = data.redirect_uris;
 
@@ -70,25 +71,25 @@ class ClientApplication extends Base {
 
     /**
      * If this app can use rpc
-     * @type {boolean}
+     * @type {?boolean}
      */
     this.rpcApplicationState = data.rpc_application_state;
 
     /**
      * Object containing basic info about this app's bot
-     * @type {Object}
+     * @type {?Object}
      */
     this.bot = data.bot;
 
     /**
      * The flags for the app
-     * @type {number}
+     * @type {?number}
      */
     this.flags = data.flags;
 
     /**
      * OAuth2 secret for the application
-     * @type {string}
+     * @type {?string}
      */
     this.secret = data.secret;
 
@@ -136,38 +137,28 @@ class ClientApplication extends Base {
    */
   coverImage({ format, size } = {}) {
     if (!this.cover) return null;
-    return Endpoints
-      .CDN(this.client.options.http.cdn)
-      .AppIcon(this.id, this.cover, { format, size });
+    return this.client.rest.cdn.AppIcon(this.id, this.cover, { format, size });
   }
 
   /**
-   * Get rich presence assets.
-   * @returns {Promise<Object>}
+   * Asset data.
+   * @typedef {Object} ClientAsset
+   * @property {Snowflake} id The asset ID
+   * @property {string} name The asset name
+   * @property {string} type The asset type
+   */
+
+  /**
+   * Gets the clients rich presence assets.
+   * @returns {Promise<Array<ClientAsset>>}
    */
   fetchAssets() {
-    const types = Object.keys(ClientApplicationAssetTypes);
     return this.client.api.oauth2.applications(this.id).assets.get()
       .then(assets => assets.map(a => ({
         id: a.id,
         name: a.name,
-        type: types[a.type - 1],
+        type: AssetTypes[a.type - 1],
       })));
-  }
-
-  /**
-   * Creates a rich presence asset.
-   * @param {string} name Name of the asset
-   * @param {Base64Resolvable} data Data of the asset
-   * @param {string} type Type of the asset. `big`, or `small`
-   * @returns {Promise}
-   */
-  async createAsset(name, data, type) {
-    return this.client.api.oauth2.applications(this.id).assets.post({ data: {
-      name,
-      type: ClientApplicationAssetTypes[type.toUpperCase()],
-      image: await DataResolver.resolveImage(data),
-    } });
   }
 
   /**
