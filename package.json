@@ -58,7 +58,8 @@
     "@types/ws": "^8.2.0",
     "discord-api-types": "^0.25.0",
     "node-fetch": "^2.6.1",
-    "ws": "^8.2.3"
+    "ws": "^8.2.3",
+    "zod": "^3.11.6"
   },
   "devDependencies": {
     "@commitlint/cli": "^15.0.0",

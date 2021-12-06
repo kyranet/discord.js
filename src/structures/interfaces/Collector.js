@@ -2,8 +2,8 @@
 
 const EventEmitter = require('node:events');
 const { Collection } = require('@discordjs/collection');
-const { TypeError } = require('../../errors');
 const Util = require('../../util/Util');
+const { collectorOptionsPredicate } = require('../../util/Validators');
 
 /**
  * Filter to be applied to the collector.
@@ -38,18 +38,20 @@ class Collector extends EventEmitter {
      */
     Object.defineProperty(this, 'client', { value: client });
 
+    const resolvedOptions = collectorOptionsPredicate.parse(options);
+
     /**
      * The filter applied to this collector
      * @type {CollectorFilter}
      * @returns {boolean|Promise<boolean>}
      */
-    this.filter = options.filter ?? (() => true);
+    this.filter = resolvedOptions.filter;
 
     /**
      * The options of this collector
      * @type {CollectorOptions}
      */
-    this.options = options;
+    this.options = resolvedOptions;
 
     /**
      * The items collected by this collector
@@ -77,15 +79,11 @@ class Collector extends EventEmitter {
      */
     this._idletimeout = null;
 
-    if (typeof this.filter !== 'function') {
-      throw new TypeError('INVALID_TYPE', 'options.filter', 'function');
-    }
-
     this.handleCollect = this.handleCollect.bind(this);
     this.handleDispose = this.handleDispose.bind(this);
 
-    if (options.time) this._timeout = setTimeout(() => this.stop('time'), options.time).unref();
-    if (options.idle) this._idletimeout = setTimeout(() => this.stop('idle'), options.idle).unref();
+    if (resolvedOptions.time) this._timeout = setTimeout(() => this.stop('time'), resolvedOptions.time).unref();
+    if (resolvedOptions.idle) this._idletimeout = setTimeout(() => this.stop('idle'), resolvedOptions.idle).unref();
   }
 
   /**

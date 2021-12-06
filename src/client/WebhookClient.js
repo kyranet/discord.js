@@ -1,8 +1,13 @@
 'use strict';
 
+const { z } = require('zod');
 const BaseClient = require('./BaseClient');
 const { Error } = require('../errors');
 const Webhook = require('../structures/Webhook');
+
+const webhookClientDataPredicate = z
+  .strictObject({ url: z.string().url() })
+  .or(z.strictObject({ id: z.string().min(17), token: z.string().nonempty() }));
 
 /**
  * The webhook client.
@@ -25,10 +30,11 @@ class WebhookClient extends BaseClient {
   constructor(data, options) {
     super(options);
     Object.defineProperty(this, 'client', { value: this });
-    let { id, token } = data;
+    let id, token;
 
-    if ('url' in data) {
-      const url = data.url.match(
+    const resolved = webhookClientDataPredicate.parse(data);
+    if ('url' in resolved) {
+      const url = resolved.url.match(
         // eslint-disable-next-line no-useless-escape
         /^https?:\/\/(?:canary|ptb)?\.?discord\.com\/api\/webhooks(?:\/v[0-9]\d*)?\/([^\/]+)\/([^\/]+)/i,
       );
@@ -36,6 +42,9 @@ class WebhookClient extends BaseClient {
       if (!url || url.length <= 1) throw new Error('WEBHOOK_URL_INVALID');
 
       [, id, token] = url;
+    } else {
+      id = resolved.id;
+      token = resolved.token;
     }
 
     this.id = id;

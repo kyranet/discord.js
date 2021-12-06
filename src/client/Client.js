@@ -1,11 +1,12 @@
 'use strict';
 
 const { Collection } = require('@discordjs/collection');
+const { z } = require('zod');
 const BaseClient = require('./BaseClient');
 const ActionsManager = require('./actions/ActionsManager');
 const ClientVoiceManager = require('./voice/ClientVoiceManager');
 const WebSocketManager = require('./websocket/WebSocketManager');
-const { Error, TypeError, RangeError } = require('../errors');
+const { Error, TypeError } = require('../errors');
 const BaseGuildEmojiManager = require('../managers/BaseGuildEmojiManager');
 const ChannelManager = require('../managers/ChannelManager');
 const GuildManager = require('../managers/GuildManager');
@@ -26,6 +27,74 @@ const Intents = require('../util/Intents');
 const Options = require('../util/Options');
 const Permissions = require('../util/Permissions');
 
+const stringPredicate = z.string().nonempty();
+const clientOptionsPredicate = z.object({
+  shards: z
+    .number()
+    .int()
+    .positive()
+    .or(z.number().int().positive().array().nonempty())
+    .or(z.literal('auto'))
+    .default('auto'),
+  shardCount: z.number().int().gte(1).default(1),
+  makeCache: z.function().default(() => Options.cacheWithLimits(Options.defaultMakeCacheSettings)),
+  allowedMentions: z
+    .strictObject({
+      parse: z
+        .union([z.literal('roles'), z.literal('users'), z.literal('everyone')])
+        .array()
+        .optional(),
+      roles: z.string().min(17).array().optional(),
+      users: z.string().min(17).array().optional(),
+      repliedUser: z.boolean().optional(),
+    })
+    .default({}),
+  invalidRequestWarningInterval: z.number().int().gt(0).default(0),
+  partials: stringPredicate.array().default([]),
+  restWsBridgeTimeout: z.number().int().default(5_000),
+  restTimeOffset: z.number().int().positive().default(500),
+  restRequestTimeout: z.number().int().default(15_000),
+  restGlobalRateLimit: z.number().int().default(0),
+  restSweepInterval: z.number().int().default(60),
+  retryLimit: z.number().int().default(1),
+  failIfNotExists: z.boolean().default(true),
+  userAgentSuffix: stringPredicate.array().default([]),
+  presence: z.strictObject({}).default({}),
+  intents: z.any().transform(Intents.resolve),
+  ws: z.strictObject({
+    large_threshold: z.number().int().default(50),
+    compress: z.boolean().default(false),
+    properties: z.strictObject({
+      $os: z.string().default(process.platform),
+      $browser: z.string().default('discord.js'),
+      $device: z.string().default('discord.js'),
+    }),
+    version: z.number().int().default(9),
+  }),
+  http: z.strictObject({
+    agent: z.object({ keepAlive: z.never() }),
+    api: stringPredicate.url().default('https://discord.com/api'),
+    version: z.number().int().default(9),
+    host: stringPredicate.url().optional(),
+    cdn: stringPredicate.url().default('https://cdn.discordapp.com'),
+    invite: stringPredicate.url().default('https://discord.gg'),
+    template: stringPredicate.url().default('https://discord.new'),
+    headers: z.record(stringPredicate, stringPredicate),
+  }),
+  rejectOnRateLimit: stringPredicate.or(z.function()),
+});
+const invitePredicate = z.strictObject({
+  scopes: z
+    .union(InviteScopes.map(scope => z.literal(scope)))
+    .array()
+    .refine(scopes =>
+      scopes.some(scope => ['bot', 'applications.commands'].includes(scope), { message: 'INVITE_MISSING_SCOPES' }),
+    ),
+  permissions: z.any().optional().transform(Permissions.resolve),
+  disableGuildSelect: z.boolean().default(false),
+  guild: z.any().default(null),
+});
+
 /**
  * The main hub for interacting with the Discord API, and the starting point for any bot.
  * @extends {BaseClient}
@@ -35,7 +104,7 @@ class Client extends BaseClient {
    * @param {ClientOptions} options Options for the client
    */
   constructor(options) {
-    super(options);
+    super(clientOptionsPredicate.parse(options));
 
     const data = require('node:worker_threads').workerData ?? process.env;
     const defaults = Options.createDefault();
@@ -69,8 +138,6 @@ class Client extends BaseClient {
         ),
       ];
     }
-
-    this._validateOptions();
 
     /**
      * Functions called when a cache is garbage collected or the Client is destroyed
@@ -225,8 +292,7 @@ class Client extends BaseClient {
    * client.login('my token');
    */
   async login(token = this.token) {
-    if (!token || typeof token !== 'string') throw new Error('TOKEN_INVALID');
-    this.token = token = token.replace(/^(Bot|Bearer)\s*/i, '');
+    this.token = token = stringPredicate.parse(token).replace(/^(Bot|Bearer)\s*/i, '');
     this.emit(
       Events.DEBUG,
       `Provided token: ${token
@@ -475,41 +541,26 @@ class Client extends BaseClient {
    * });
    * console.log(`Generated bot invite link: ${link}`);
    */
-  generateInvite(options = {}) {
-    if (typeof options !== 'object') throw new TypeError('INVALID_TYPE', 'options', 'object', true);
+  generateInvite(options) {
     if (!this.application) throw new Error('CLIENT_NOT_READY', 'generate an invite link');
+    const resolved = invitePredicate.parse(options);
 
     const query = new URLSearchParams({
       client_id: this.application.id,
     });
 
-    const { scopes } = options;
-    if (typeof scopes === 'undefined') {
-      throw new TypeError('INVITE_MISSING_SCOPES');
-    }
-    if (!Array.isArray(scopes)) {
-      throw new TypeError('INVALID_TYPE', 'scopes', 'Array of Invite Scopes', true);
-    }
-    if (!scopes.some(scope => ['bot', 'applications.commands'].includes(scope))) {
-      throw new TypeError('INVITE_MISSING_SCOPES');
-    }
-    const invalidScope = scopes.find(scope => !InviteScopes.includes(scope));
-    if (invalidScope) {
-      throw new TypeError('INVALID_ELEMENT', 'Array', 'scopes', invalidScope);
-    }
-    query.set('scope', scopes.join(' '));
+    query.set('scope', resolved.scopes.join(' '));
 
-    if (options.permissions) {
-      const permissions = Permissions.resolve(options.permissions);
-      if (permissions) query.set('permissions', permissions);
+    if (resolved.permissions) {
+      query.set('permissions', resolved.permissions.toString());
     }
 
-    if (options.disableGuildSelect) {
-      query.set('disable_guild_select', true);
+    if (resolved.disableGuildSelect) {
+      query.set('disable_guild_select', 'true');
     }
 
-    if (options.guild) {
-      const guildId = this.guilds.resolveId(options.guild);
+    if (resolved.guild) {
+      const guildId = this.guilds.resolveId(resolved.guild);
       if (!guildId) throw new TypeError('INVALID_TYPE', 'options.guild', 'GuildResolvable');
       query.set('guild_id', guildId);
     }
@@ -532,68 +583,6 @@ class Client extends BaseClient {
    */
   _eval(script) {
     return eval(script);
-  }
-
-  /**
-   * Validates the client options.
-   * @param {ClientOptions} [options=this.options] Options to validate
-   * @private
-   */
-  _validateOptions(options = this.options) {
-    if (typeof options.intents === 'undefined') {
-      throw new TypeError('CLIENT_MISSING_INTENTS');
-    } else {
-      options.intents = Intents.resolve(options.intents);
-    }
-    if (typeof options.shardCount !== 'number' || isNaN(options.shardCount) || options.shardCount < 1) {
-      throw new TypeError('CLIENT_INVALID_OPTION', 'shardCount', 'a number greater than or equal to 1');
-    }
-    if (options.shards && !(options.shards === 'auto' || Array.isArray(options.shards))) {
-      throw new TypeError('CLIENT_INVALID_OPTION', 'shards', "'auto', a number or array of numbers");
-    }
-    if (options.shards && !options.shards.length) throw new RangeError('CLIENT_INVALID_PROVIDED_SHARDS');
-    if (typeof options.makeCache !== 'function') {
-      throw new TypeError('CLIENT_INVALID_OPTION', 'makeCache', 'a function');
-    }
-    if (typeof options.messageCacheLifetime !== 'number' || isNaN(options.messageCacheLifetime)) {
-      throw new TypeError('CLIENT_INVALID_OPTION', 'The messageCacheLifetime', 'a number');
-    }
-    if (typeof options.messageSweepInterval !== 'number' || isNaN(options.messageSweepInterval)) {
-      throw new TypeError('CLIENT_INVALID_OPTION', 'messageSweepInterval', 'a number');
-    }
-    if (typeof options.invalidRequestWarningInterval !== 'number' || isNaN(options.invalidRequestWarningInterval)) {
-      throw new TypeError('CLIENT_INVALID_OPTION', 'invalidRequestWarningInterval', 'a number');
-    }
-    if (!Array.isArray(options.partials)) {
-      throw new TypeError('CLIENT_INVALID_OPTION', 'partials', 'an Array');
-    }
-    if (typeof options.restWsBridgeTimeout !== 'number' || isNaN(options.restWsBridgeTimeout)) {
-      throw new TypeError('CLIENT_INVALID_OPTION', 'restWsBridgeTimeout', 'a number');
-    }
-    if (typeof options.restRequestTimeout !== 'number' || isNaN(options.restRequestTimeout)) {
-      throw new TypeError('CLIENT_INVALID_OPTION', 'restRequestTimeout', 'a number');
-    }
-    if (typeof options.restGlobalRateLimit !== 'number' || isNaN(options.restGlobalRateLimit)) {
-      throw new TypeError('CLIENT_INVALID_OPTION', 'restGlobalRateLimit', 'a number');
-    }
-    if (typeof options.restSweepInterval !== 'number' || isNaN(options.restSweepInterval)) {
-      throw new TypeError('CLIENT_INVALID_OPTION', 'restSweepInterval', 'a number');
-    }
-    if (typeof options.retryLimit !== 'number' || isNaN(options.retryLimit)) {
-      throw new TypeError('CLIENT_INVALID_OPTION', 'retryLimit', 'a number');
-    }
-    if (typeof options.failIfNotExists !== 'boolean') {
-      throw new TypeError('CLIENT_INVALID_OPTION', 'failIfNotExists', 'a boolean');
-    }
-    if (!Array.isArray(options.userAgentSuffix)) {
-      throw new TypeError('CLIENT_INVALID_OPTION', 'userAgentSuffix', 'an array of strings');
-    }
-    if (
-      typeof options.rejectOnRateLimit !== 'undefined' &&
-      !(typeof options.rejectOnRateLimit === 'function' || Array.isArray(options.rejectOnRateLimit))
-    ) {
-      throw new TypeError('CLIENT_INVALID_OPTION', 'rejectOnRateLimit', 'an array or a function');
-    }
   }
 }
 
